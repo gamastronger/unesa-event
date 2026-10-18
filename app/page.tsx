@@ -196,9 +196,39 @@ export default function Page() {
     <header className="topbar">
       <div className="brand" onClick={() => setView('catalog')} role="button" tabIndex={0}><span className="brand-mark"><Sparkles size={16} /></span><span>UNESA <strong>Event Hub</strong></span></div>
       <nav className="desktop-nav" aria-label="Navigasi utama">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{label}</button>)}</nav>
-      <div className="top-actions"><button className="icon-button" aria-label="Ganti tema" onClick={() => setDark(!dark)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button><button className="install-button" onClick={handleInstallClick}><Download size={16} />{installed ? 'Terpasang' : 'Install App'}</button><button className="menu-button" aria-label="Buka menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={20} /></button></div>
+      <div className="top-actions">
+        <button className="icon-button" aria-label="Ganti tema" onClick={() => setDark(!dark)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button>
+        <button className="install-button" onClick={handleInstallClick}><Download size={16} />{installed ? 'Terpasang' : 'Install App'}</button>
+        <button className="menu-button" aria-label="Buka menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X size={20} /> : <Menu size={20} />}</button>
+      </div>
     </header>
-    {menuOpen && <div className="mobile-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => { setView(id); setMenuOpen(false) }}><Icon size={17} />{label}</button>)}</div>}
+
+    {menuOpen && (
+      <>
+        <div className="mobile-nav-backdrop" onClick={() => setMenuOpen(false)} />
+        <div className="mobile-nav">
+          {navItems.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={view === id ? 'active' : ''}
+              onClick={() => {
+                setView(id)
+                setMenuOpen(false)
+                window.scrollTo({ top: 0, behavior: 'smooth' })
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                <Icon size={17} />
+                <span>{label}</span>
+              </div>
+              {id === 'offline' && saved.length > 0 && (
+                <span className="mobile-menu-badge">{saved.length}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </>
+    )}
 
     {view === 'catalog' && <main>
       <section className="hero"><div className="hero-grid" /><div className="hero-content"><Overline>RADAR PRESTASI UNESA / 2026</Overline><h1>Terhubung dengan<br /><em>ekosistem prestasi</em><br />dan inovasi.</h1><p>Kurasi kompetisi, hibah, dan program pengembangan mahasiswa dalam satu ruang yang mudah ditelusuri.</p><button className="primary-button" onClick={goToCatalog}>Eksplorasi Kompetisi <ArrowUpRight size={17} /></button></div><div className="radar"><div className="radar-ring ring-one" /><div className="radar-ring ring-two" /><div className="radar-ring ring-three" /><div className="radar-sweep" /><div className="radar-dot dot-a" /><div className="radar-dot dot-b" /><div className="radar-dot dot-c" /><span className="radar-label label-a">PKM 5 BIDANG</span><span className="radar-label label-b">GEMASTIK XVIII</span></div></section>
@@ -213,8 +243,38 @@ export default function Page() {
 
     <footer><div className="brand"><span className="brand-mark"><Sparkles size={16} /></span><span>UNESA <strong>Event Hub</strong></span></div><p>Prototype akademik untuk ekosistem prestasi mahasiswa.</p><span className="footer-code">BUILD 0.9.4 / SURABAYA</span></footer>
 
+    {/* Native PWA Mobile Bottom Navigation */}
+    <nav className="mobile-bottom-nav" aria-label="Navigasi Mobile PWA">
+      {navItems.map(({ id, label, icon: Icon }) => {
+        const isActive = view === id
+        const isOfflineTab = id === 'offline'
+        return (
+          <button
+            key={id}
+            className={`bottom-nav-item ${isActive ? 'active' : ''}`}
+            onClick={() => {
+              setView(id)
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+            aria-label={label}
+          >
+            <div className="bottom-nav-icon-wrapper">
+              <Icon size={19} />
+              {isOfflineTab && saved.length > 0 && (
+                <span className="bottom-nav-badge">{saved.length}</span>
+              )}
+            </div>
+            <span className="bottom-nav-label">
+              {id === 'catalog' ? 'Katalog' : id === 'offline' ? 'Disimpan' : id === 'calendar' ? 'Kalender' : 'Panduan'}
+            </span>
+          </button>
+        )
+      })}
+    </nav>
+
     {selected && <div className="modal-backdrop" role="presentation" onClick={() => setSelected(null)}>
       <div className="detail-modal" role="dialog" aria-modal="true" aria-label={selected.title} onClick={(event) => event.stopPropagation()}>
+        <div className="modal-drag-indicator" aria-hidden="true" />
         <button className="modal-close" onClick={() => setSelected(null)} aria-label="Tutup detail"><X size={18} /></button>
         <div className="detail-poster">
           <Poster event={selected} large />
@@ -314,6 +374,7 @@ function CalendarView({ exportICS, setSelected }: { exportICS: () => void; setSe
 }
 
 function GuideView() {
+  const [guidePlatform, setGuidePlatform] = useState<'android' | 'ios'>('android')
   const steps = [
     ['01', 'Validasi Akun', 'Pastikan profil mahasiswa dan email institusi telah aktif.'],
     ['02', 'Rekomendasi Fakultas', 'Pilih program yang selaras dengan minat dan rekam jejakmu.'],
@@ -359,16 +420,38 @@ function GuideView() {
         <Smartphone size={25} />
         <Overline>INSTALLATION GUIDE</Overline>
         <h2>Bawa radar prestasi<br />ke layar utama.</h2>
-        <p>Install sebagai PWA untuk akses cepat, notifikasi deadline, dan mode luring.</p>
+        <p>Install sebagai PWA untuk akses cepat, notifikasi deadline, dan mode luring tanpa hambatan.</p>
       </div>
       <div className="install-tabs">
-        <button className="selected">Chrome / Android</button>
-        <button>Safari / iOS</button>
-        <ol>
-          <li>Buka menu browser di kanan atas.</li>
-          <li>Pilih <strong>Install app</strong> atau Add to Home Screen.</li>
-          <li>Mulai jelajahi event dari layar utama.</li>
-        </ol>
+        <div className="install-tabs-nav">
+          <button
+            className={`install-tab-btn ${guidePlatform === 'android' ? 'selected' : ''}`}
+            onClick={() => setGuidePlatform('android')}
+          >
+            Chrome / Android
+          </button>
+          <button
+            className={`install-tab-btn ${guidePlatform === 'ios' ? 'selected' : ''}`}
+            onClick={() => setGuidePlatform('ios')}
+          >
+            Safari / iOS
+          </button>
+        </div>
+        {guidePlatform === 'android' ? (
+          <ol className="install-steps">
+            <li>Buka peramban <strong>Chrome</strong> di ponsel Android.</li>
+            <li>Ketuk menu titik tiga di kanan atas.</li>
+            <li>Pilih <strong>Install app</strong> atau <strong>Tambahkan ke Layar Utama</strong>.</li>
+            <li>Buka aplikasi langsung dari app drawer atau homescreen.</li>
+          </ol>
+        ) : (
+          <ol className="install-steps">
+            <li>Buka peramban <strong>Safari</strong> di perangkat iOS / iPhone.</li>
+            <li>Ketuk tombol <strong>Bagikan (Share)</strong> di baris navigasi bawah.</li>
+            <li>Gulir ke bawah dan ketuk <strong>Add to Home Screen (Layar Utama)</strong>.</li>
+            <li>Ketuk <strong>Tambah (Add)</strong> di pojok kanan atas.</li>
+          </ol>
+        )}
       </div>
     </section>
   </main>

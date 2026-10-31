@@ -75,12 +75,41 @@ function Poster({ event, large = false }: { event: Event; large?: boolean }) {
   return <div className={`poster poster-${event.tone} ${large ? 'poster-large' : ''}`}><div className="poster-grid" /><div className="poster-word">{event.poster.split('\n').map((line) => <span key={line}>{line}</span>)}</div><div className="poster-mark">UNESA<br /><small>EVENT HUB</small></div></div>
 }
 
+const STORAGE_KEY_SAVED_IDS = 'unesa_eventhub_saved_ids'
+const STORAGE_KEY_OFFLINE_EVENTS = 'unesa_eventhub_offline_events'
+const STORAGE_KEY_LAST_SYNC = 'unesa_eventhub_last_sync'
+
+function formatSyncDate(isoString: string) {
+  if (!isoString) return 'Baru saja'
+  try {
+    const d = new Date(isoString)
+    return (
+      d.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }) + ' WIB'
+    )
+  } catch {
+    return 'Baru saja'
+  }
+}
+
 export default function Page() {
   const [view, setView] = useState('catalog')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('Semua')
   const [onlySkpi, setOnlySkpi] = useState(false)
   const [saved, setSaved] = useState<string[]>(['pkm', 'gemastik'])
+  const [lastSync, setLastSync] = useState<string>('')
+  const [storageStats, setStorageStats] = useState<{ usageMB: number; quotaMB: number; percent: number }>({
+    usageMB: 1.5,
+    quotaMB: 50,
+    percent: 3,
+  })
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [selected, setSelected] = useState<Event | null>(null)
   const [dark, setDark] = useState(false)
   const [offline, setOffline] = useState(false)
@@ -89,6 +118,7 @@ export default function Page() {
   const [menuOpen, setMenuOpen] = useState(false)
   const filters = ['Semua', 'Webinar & Seminar', 'Workshop', 'Karya Tulis Ilmiah', 'Teknologi & Coding', 'Olimpiade & Sains', 'Seni & Desain', 'Gratis', 'Beregu / Tim', 'Eligible SKPI']
 
+  // Persistent Offline Storage & Service Worker Sync
   useEffect(() => {
     const savedTheme = localStorage.getItem('unesa-theme')
     if (savedTheme === 'dark') setDark(true)
@@ -97,13 +127,69 @@ export default function Page() {
     window.addEventListener('online', update)
     window.addEventListener('offline', update)
 
-    // PWA Service Worker Registration
+    // Load saved events from localStorage on initial render
+    let activeSaved = ['pkm', 'gemastik']
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_SAVED_IDS)
+      if (stored !== null) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed)) {
+          activeSaved = parsed
+          setSaved(parsed)
+        }
+      } else {
+        localStorage.setItem(STORAGE_KEY_SAVED_IDS, JSON.stringify(activeSaved))
+        const initialEvents = events.filter((e) => activeSaved.includes(e.id))
+        localStorage.setItem(STORAGE_KEY_OFFLINE_EVENTS, JSON.stringify(initialEvents))
+      }
+
+      const syncTime = localStorage.getItem(STORAGE_KEY_LAST_SYNC)
+      if (syncTime) {
+        setLastSync(syncTime)
+      } else {
+        const now = new Date().toISOString()
+        localStorage.setItem(STORAGE_KEY_LAST_SYNC, now)
+        setLastSync(now)
+      }
+    } catch (err) {
+      console.warn('[PWA] Error reading saved events from storage:', err)
+    }
+
+    // Measure storage usage
+    const measureStorage = () => {
+      if (typeof window !== 'undefined' && navigator.storage && navigator.storage.estimate) {
+        navigator.storage.estimate().then(({ usage = 0, quota = 52428800 }) => {
+          const usageMB = +(usage / (1024 * 1024)).toFixed(1)
+          const quotaMB = +(quota / (1024 * 1024)).toFixed(0)
+          const percent = Math.min(100, Math.max(1, Math.round((usage / quota) * 100)))
+          setStorageStats({ usageMB, quotaMB, percent })
+        }).catch(() => {})
+      }
+    }
+    measureStorage()
+
+    // PWA Service Worker Registration & sync
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       const registerSW = () => {
         navigator.serviceWorker
           .register('/sw.js')
           .then((reg) => {
-            console.log('[PWA] Service Worker registered with scope:', reg.scope)
+            console.log('[PWA] Service Worker active with scope:', reg.scope)
+            if (reg.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+            }
+            // Send current saved events to ensure SW cache is warmed up
+            navigator.serviceWorker.ready.then((readyReg) => {
+              const currentSavedEvents = events.filter((e) => activeSaved.includes(e.id))
+              readyReg.active?.postMessage({
+                type: 'SYNC_OFFLINE_EVENTS',
+                payload: {
+                  savedIds: activeSaved,
+                  events: currentSavedEvents,
+                  timestamp: Date.now(),
+                },
+              })
+            })
           })
           .catch((err) => {
             console.error('[PWA] Service Worker registration failed:', err)
@@ -186,7 +272,79 @@ export default function Page() {
     }
   }
 
-  const toggleSaved = (id: string) => setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  // Core offline storage persistence function
+  const saveAndSync = (newSavedIds: string[], toastNotice?: string) => {
+    setSaved(newSavedIds)
+    try {
+      localStorage.setItem(STORAGE_KEY_SAVED_IDS, JSON.stringify(newSavedIds))
+      const currentSavedEvents = events.filter((ev) => newSavedIds.includes(ev.id))
+      localStorage.setItem(STORAGE_KEY_OFFLINE_EVENTS, JSON.stringify(currentSavedEvents))
+      const now = new Date().toISOString()
+      localStorage.setItem(STORAGE_KEY_LAST_SYNC, now)
+      setLastSync(now)
+
+      // Sync with Service Worker Cache
+      if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.active?.postMessage({
+            type: 'SYNC_OFFLINE_EVENTS',
+            payload: {
+              savedIds: newSavedIds,
+              events: currentSavedEvents,
+              timestamp: Date.now(),
+            },
+          })
+        }).catch(() => {})
+      }
+
+      // Re-measure storage
+      if (typeof window !== 'undefined' && navigator.storage && navigator.storage.estimate) {
+        navigator.storage.estimate().then(({ usage = 0, quota = 52428800 }) => {
+          const usageMB = +(usage / (1024 * 1024)).toFixed(1)
+          const quotaMB = +(quota / (1024 * 1024)).toFixed(0)
+          const percent = Math.min(100, Math.max(1, Math.round((usage / quota) * 100)))
+          setStorageStats({ usageMB, quotaMB, percent })
+        }).catch(() => {})
+      }
+    } catch (err) {
+      console.error('[PWA] Failed to update offline storage:', err)
+    }
+
+    if (toastNotice) {
+      setToastMessage(toastNotice)
+      if ((window as any)._pwaToastTimer) clearTimeout((window as any)._pwaToastTimer)
+      ;(window as any)._pwaToastTimer = setTimeout(() => setToastMessage(null), 3200)
+    }
+  }
+
+  const toggleSaved = (id: string) => {
+    const isCurrentlySaved = saved.includes(id)
+    const newSaved = isCurrentlySaved ? saved.filter((item) => item !== id) : [...saved, id]
+    const eventObj = events.find((e) => e.id === id)
+    const eventName = eventObj ? `"${eventObj.title}"` : 'Acara'
+    
+    if (isCurrentlySaved) {
+      saveAndSync(newSaved, `${eventName} dihapus dari penyimpanan offline.`)
+    } else {
+      saveAndSync(newSaved, `${eventName} berhasil disimpan offline!`)
+    }
+  }
+
+  const resyncOfflineStorage = () => {
+    saveAndSync(saved, 'Semua acara offline berhasil disinkronkan ulang!')
+  }
+
+  const clearOfflineStorage = () => {
+    if (typeof window !== 'undefined' && window.confirm('Hapus semua acara yang tersimpan offline?')) {
+      saveAndSync([], 'Penyimpanan offline berhasil dibersihkan.')
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.active?.postMessage({ type: 'CLEAR_OFFLINE_EVENTS' })
+        }).catch(() => {})
+      }
+    }
+  }
+
   const goToCatalog = () => { setView('catalog'); setTimeout(() => document.getElementById('catalog')?.scrollIntoView({ behavior: 'smooth' }), 0) }
   const exportICS = (event: Event) => { const body = `BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:${event.title}\nDTSTART:20261018T080000\nDESCRIPTION:${event.scope}\nEND:VEVENT\nEND:VCALENDAR`; const blob = new Blob([body], { type: 'text/calendar' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `${event.id}.ics`; link.click(); URL.revokeObjectURL(link.href) }
   const share = async (event: Event) => { const text = `${event.title} — ${event.date}\n${event.category} · ${event.format}\nSKPI: ${event.skpi}\nDaftar di UNESA Event Hub`; if (navigator.share) await navigator.share({ title: event.title, text }); else await navigator.clipboard?.writeText(text) }
@@ -195,7 +353,17 @@ export default function Page() {
     {offline && <div className="offline-banner"><WifiOff size={15} /> Mode Luring Aktif — Menampilkan data dan berkas yang tersimpan di memori perangkat.</div>}
     <header className="topbar">
       <div className="brand" onClick={() => setView('catalog')} role="button" tabIndex={0}><span className="brand-mark"><Sparkles size={16} /></span><span>UNESA <strong>Event Hub</strong></span></div>
-      <nav className="desktop-nav" aria-label="Navigasi utama">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon size={16} />{label}</button>)}</nav>
+      <nav className="desktop-nav" aria-label="Navigasi utama">
+        {navItems.map(({ id, label, icon: Icon }) => (
+          <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>
+            <Icon size={16} />
+            {label}
+            {id === 'offline' && saved.length > 0 && (
+              <span className="nav-badge">{saved.length}</span>
+            )}
+          </button>
+        ))}
+      </nav>
       <div className="top-actions">
         <button className="icon-button" aria-label="Ganti tema" onClick={() => setDark(!dark)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button>
         <button className="install-button" onClick={handleInstallClick}><Download size={16} />{installed ? 'Terpasang' : 'Install App'}</button>
@@ -237,7 +405,18 @@ export default function Page() {
       <section className="catalog" id="catalog"><div className="section-heading"><div><Overline>DIRECTORY / {String(filtered.length).padStart(2, '0')} RESULTS</Overline><h2>Temukan ruang bertumbuh.</h2></div><p className="section-aside">Gunakan filter untuk menemukan<br />acara yang paling relevan.</p></div><div className="search-row"><label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari kompetisi, bidang, atau penyelenggara" aria-label="Cari event" />{query && <button onClick={() => setQuery('')} aria-label="Hapus pencarian"><X size={16} /></button>}</label><button className="filter-toggle"><Filter size={16} /> Filter</button></div><div className="chips" role="group" aria-label="Filter acara">{filters.map((item) => { const isSelected = item === 'Eligible SKPI' ? (onlySkpi || filter === 'Eligible SKPI') : (filter === item && (item !== 'Semua' || !onlySkpi)); return <button key={item} className={isSelected ? 'selected' : ''} onClick={() => handleChipClick(item)}>{item === 'Eligible SKPI' ? '⭐ Eligible SKPI' : item}</button> })}</div><div className="event-grid">{filtered.map((event) => <article className="event-card" key={event.id}><button className="card-poster-button" onClick={() => setSelected(event)} aria-label={`Lihat detail ${event.title}`}><Poster event={event} /><span className="deadline-badge">{event.deadline}</span></button><div className="event-body"><div className="event-tags-row"><span className="category-label">{event.category}</span>{isSkpiValid(event) && <span className="skpi-badge" title="Poin SKPI Terverifikasi">⭐ {event.skpi}</span>}</div><h3>{event.title}</h3><p className="organizer">{event.organizer}</p><div className="event-meta"><span><CalendarDays size={14} />{event.date}</span><span><Users size={14} />{event.format}</span><span><Sparkles size={14} />{event.fee}</span></div><div className="event-actions"><button onClick={() => toggleSaved(event.id)} className={saved.includes(event.id) ? 'saved' : ''}><BookmarkIcon filled={saved.includes(event.id)} />{saved.includes(event.id) ? 'Tersimpan' : 'Simpan Offline'}</button><button onClick={() => exportICS(event)} aria-label="Export kalender"><CalendarDays size={15} />.ICS</button><button onClick={() => share(event)} aria-label="Bagikan acara"><Share2 size={15} /></button><button className="detail-link" onClick={() => setSelected(event)}>Detail <ArrowUpRight size={15} /></button></div></div></article>)}</div>{filtered.length === 0 && <div className="empty-state"><Search size={24} /><h3>Tidak ada acara yang cocok.</h3><p>Coba kata kunci atau filter lain.</p></div>}</section>
     </main>}
 
-    {view === 'offline' && <OfflineView saved={saved} toggleSaved={toggleSaved} setView={setView} setSelected={setSelected} />}
+    {view === 'offline' && (
+      <OfflineView
+        saved={saved}
+        toggleSaved={toggleSaved}
+        setView={setView}
+        setSelected={setSelected}
+        storageStats={storageStats}
+        lastSync={lastSync}
+        resyncOfflineStorage={resyncOfflineStorage}
+        clearOfflineStorage={clearOfflineStorage}
+      />
+    )}
     {view === 'calendar' && <CalendarView exportICS={() => events.forEach(exportICS)} setSelected={setSelected} />}
     {view === 'guide' && <GuideView />}
 
@@ -295,32 +474,70 @@ export default function Page() {
           <h4>Persyaratan utama</h4>
           <ul>{selected.eligibility.map((item) => <li key={item}><Check size={16} />{item}</li>)}</ul>
           <div className="detail-footer">
-            <button className="primary-button full-width">Daftar di Portal Resmi <ExternalLink size={16} /></button>
+            <div className="detail-actions-row">
+              <button className="primary-button full-width">Daftar di Portal Resmi <ExternalLink size={16} /></button>
+              <button
+                className={`modal-save-btn ${saved.includes(selected.id) ? 'saved' : ''}`}
+                onClick={() => toggleSaved(selected.id)}
+                aria-label={saved.includes(selected.id) ? 'Hapus dari offline' : 'Simpan offline'}
+              >
+                <BookmarkIcon filled={saved.includes(selected.id)} />
+                {saved.includes(selected.id) ? 'Tersimpan' : 'Simpan Offline'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </div>}
+
+    {toastMessage && (
+      <div className="pwa-toast" role="status" aria-live="polite">
+        <span className="pwa-toast-icon"><Check size={16} /></span>
+        <span>{toastMessage}</span>
+      </div>
+    )}
   </div>
 }
 
 function BookmarkIcon({ filled }: { filled: boolean }) { return <svg width="15" height="15" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z" /></svg> }
 
-function OfflineView({ saved, toggleSaved, setView, setSelected }: { saved: string[]; toggleSaved: (id: string) => void; setView: (view: string) => void; setSelected: (event: Event) => void }) {
-  const savedEvents = events.filter((event) => saved.includes(event.id));
+function OfflineView({
+  saved,
+  toggleSaved,
+  setView,
+  setSelected,
+  storageStats,
+  lastSync,
+  resyncOfflineStorage,
+  clearOfflineStorage,
+}: {
+  saved: string[]
+  toggleSaved: (id: string) => void
+  setView: (view: string) => void
+  setSelected: (event: Event) => void
+  storageStats: { usageMB: number; quotaMB: number; percent: number }
+  lastSync: string
+  resyncOfflineStorage: () => void
+  clearOfflineStorage: () => void
+}) {
+  const savedEvents = events.filter((event) => saved.includes(event.id))
   return <main className="subpage">
     <div className="subpage-intro"><Overline>STORAGE / LOCAL PERSISTENCE</Overline><h1>Disimpan <em>offline.</em></h1><p>Acara dan berkas penting yang tetap tersedia saat koneksi sedang tidak bersahabat.</p></div>
     <div className="storage-grid">
       <div className="storage-card storage-main">
         <div className="storage-top"><div><span className="status-dot" />PWA STORAGE ACTIVE</div><MoreHorizontal size={19} /></div>
-        <strong>4.2 <small>MB</small></strong>
-        <p>terpakai dari 50 MB kuota lokal</p>
-        <div className="progress"><span /></div>
-        <div className="storage-actions"><button className="primary-button"><Download size={15} /> Sinkronkan Ulang</button><button className="text-button">Bersihkan cache</button></div>
+        <strong>{storageStats.usageMB} <small>MB</small></strong>
+        <p>terpakai dari {storageStats.quotaMB} MB kuota lokal ({storageStats.percent}%)</p>
+        <div className="progress"><span style={{ width: `${storageStats.percent}%` }} /></div>
+        <div className="storage-actions">
+          <button className="primary-button" onClick={resyncOfflineStorage}><Download size={15} /> Sinkronkan Ulang</button>
+          <button className="text-button" onClick={clearOfflineStorage}>Bersihkan cache</button>
+        </div>
       </div>
-      <div className="storage-card cache-info"><WifiOff size={22} /><h3>Siap untuk luring</h3><p>Semua acara tersimpan memiliki detail, rulebook, dan tautan pendaftaran yang dapat diakses tanpa koneksi.</p><span>Terakhir sinkronisasi · 10 Sep 2026, 14:32</span></div>
+      <div className="storage-card cache-info"><WifiOff size={22} /><h3>Siap untuk luring</h3><p>Semua acara tersimpan memiliki detail, rulebook, dan tautan pendaftaran yang dapat diakses tanpa koneksi.</p><span>Terakhir sinkronisasi · {formatSyncDate(lastSync)}</span></div>
     </div>
     <div className="subpage-section">
-      <div className="section-heading"><div><Overline>MY COLLECTION / {savedEvents.length} ITEMS</Overline><h2>Kompetisi pilihanmu.</h2></div><button className="text-button" onClick={() => setView('catalog')}>Tambah acara <ChevronRight size={16} /></button></div>
+      <div className="section-heading"><div><Overline>MY COLLECTION / {String(savedEvents.length).padStart(2, '0')} ITEMS</Overline><h2>Kompetisi pilihanmu.</h2></div><button className="text-button" onClick={() => setView('catalog')}>Tambah acara <ChevronRight size={16} /></button></div>
       <div className="saved-list">
         {savedEvents.map((event) => (
           <div className="saved-item" key={event.id}>
@@ -341,7 +558,11 @@ function OfflineView({ saved, toggleSaved, setView, setSelected }: { saved: stri
     </div>
     <div className="subpage-section">
       <div className="section-heading"><div><Overline>DOWNLOADED FILES / 03 PDF</Overline><h2>Rak rulebook.</h2></div></div>
-      <div className="file-grid">{['Panduan PKM 2026.pdf', 'Technical Handbook GEMASTIK.pdf', 'Template Proposal UNESA.docx'].map((file, index) => <div className="file-tile" key={file}><FileText size={22} /><div><strong>{file}</strong><span>{index === 2 ? '218 KB' : '2.4 MB'} · 10 Sep 2026</span></div><button aria-label={`Buka ${file}`}><ArrowUpRight size={16} /></button></div>)}</div>
+      <div className="file-grid">{['Panduan PKM 2026.pdf', 'Technical Handbook GEMASTIK.pdf', 'Template Proposal UNESA.docx'].map((file, index) => <div className="file-tile" key={file}>
+        <FileText size={22} />
+        <div><strong>{file}</strong><span>{index === 2 ? '218 KB' : '2.4 MB'} · 10 Sep 2026</span></div>
+        <button aria-label={`Buka ${file}`}><ArrowUpRight size={16} /></button>
+      </div>)}</div>
     </div>
   </main>
 }

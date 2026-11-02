@@ -225,7 +225,7 @@ export default function Page() {
 
   const filtered = useMemo(() => events.filter((event) => {
     const matchesQuery = `${event.title} ${event.category} ${event.organizer} ${event.skpi} ${event.format}`.toLowerCase().includes(query.toLowerCase())
-    
+
     let matchesCategory = false
     if (filter === 'Semua') {
       matchesCategory = true
@@ -322,7 +322,7 @@ export default function Page() {
     const newSaved = isCurrentlySaved ? saved.filter((item) => item !== id) : [...saved, id]
     const eventObj = events.find((e) => e.id === id)
     const eventName = eventObj ? `"${eventObj.title}"` : 'Acara'
-    
+
     if (isCurrentlySaved) {
       saveAndSync(newSaved, `${eventName} dihapus dari penyimpanan offline.`)
     } else {

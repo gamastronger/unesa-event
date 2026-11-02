@@ -1,9 +1,18 @@
-import type { ComponentType } from 'react'
+export type EventTone = 'blue' | 'ink' | 'coral' | 'mint' | 'yellow' | 'purple'
+
+export type EventCategory =
+  | 'Karya Tulis Ilmiah'
+  | 'Teknologi & Coding'
+  | 'Webinar & Seminar'
+  | 'Workshop'
+  | 'Seni & Desain'
+  | 'Olimpiade & Sains'
+  | string
 
 export interface Event {
   id: string
   title: string
-  category: string
+  category: EventCategory
   organizer: string
   date: string
   deadline: string
@@ -11,25 +20,11 @@ export interface Event {
   format: string
   prize: string
   poster: string
-  tone: string
+  tone: EventTone | string
   featured?: boolean
   team?: boolean
   free?: boolean
   scope: string
   eligibility: string[]
   skpi: string
-}
-
-export type ViewType = 'catalog' | 'offline' | 'calendar' | 'guide'
-
-export interface StorageStats {
-  usageMB: number
-  quotaMB: number
-  percent: number
-}
-
-export interface NavItem {
-  id: ViewType
-  label: string
-  icon: ComponentType<{ size?: number; className?: string }>
 }

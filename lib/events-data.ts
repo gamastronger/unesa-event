@@ -1,14 +1,25 @@
 import {
   BookOpen,
   CalendarDays,
+  Download,
+  FileText,
   HardDriveDownload,
   LayoutGrid,
+  ShieldCheck,
 } from 'lucide-react'
-import type { Event, NavItem } from '@/types/event'
+import type {
+  DeadlineMetric,
+  Event,
+  GuideResource,
+  GuideStep,
+  NavItem,
+  TimelineItem,
+} from '@/types'
 
 export const STORAGE_KEY_SAVED_IDS = 'unesa_eventhub_saved_ids'
 export const STORAGE_KEY_OFFLINE_EVENTS = 'unesa_eventhub_offline_events'
 export const STORAGE_KEY_LAST_SYNC = 'unesa_eventhub_last_sync'
+export const STORAGE_KEY_THEME = 'unesa-theme'
 
 export const events: Event[] = [
   {
@@ -211,6 +222,74 @@ export const eventFilters: string[] = [
   'Eligible SKPI',
 ]
 
+export const timelineEvents: TimelineItem[] = [
+  {
+    day: '15 OKT',
+    phase: 'Batas pengumpulan proposal',
+    title: 'PKM 5 Bidang 2026',
+    tone: 'deadline',
+  },
+  {
+    day: '20 OKT',
+    phase: 'Technical meeting nasional',
+    title: 'GEMASTIK XVIII',
+    tone: 'review',
+  },
+  {
+    day: '06 NOV',
+    phase: 'Kurasi dan penjurian karya',
+    title: 'Festival Kriya Nusantara',
+    tone: 'review',
+  },
+  {
+    day: '12 NOV',
+    phase: 'Pengumuman finalis',
+    title: 'Olimpiade Sains UNESA',
+    tone: 'announce',
+  },
+]
+
+export const deadlineMetrics: DeadlineMetric[] = [
+  { label: 'TUTUP DALAM 72 JAM', count: '03', unit: 'Event' },
+  { label: 'TAHAP REVIEW', count: '06', unit: 'Event' },
+  { label: 'PENGUMUMAN FINALIS', count: '02', unit: 'Event' },
+]
+
+export const guideSteps: GuideStep[] = [
+  {
+    number: '01',
+    title: 'Validasi Akun',
+    description: 'Pastikan profil mahasiswa dan email institusi telah aktif.',
+  },
+  {
+    number: '02',
+    title: 'Rekomendasi Fakultas',
+    description: 'Pilih program yang selaras dengan minat dan rekam jejakmu.',
+  },
+  {
+    number: '03',
+    title: 'Verifikasi Penyelenggara',
+    description: 'Periksa rulebook, jadwal, dan kanal resmi sebelum mendaftar.',
+  },
+  {
+    number: '04',
+    title: 'SK Tugas Rektorat',
+    description: 'Ajukan dukungan resmi untuk kompetisi tingkat nasional.',
+  },
+]
+
+export const guideResources: GuideResource[] = [
+  { title: 'Template Proposal', meta: 'DOCX · 218 KB', icon: FileText },
+  { title: 'Surat Tugas Rektorat', meta: 'DOCX · 144 KB', icon: ShieldCheck },
+  { title: 'Form Pengajuan Dana', meta: 'PDF · 92 KB', icon: Download },
+]
+
+export const offlineRulebookFiles = [
+  { name: 'Panduan PKM 2026.pdf', size: '2.4 MB', date: '10 Sep 2026' },
+  { name: 'Technical Handbook GEMASTIK.pdf', size: '2.4 MB', date: '10 Sep 2026' },
+  { name: 'Template Proposal UNESA.docx', size: '218 KB', date: '10 Sep 2026' },
+]
+
 export function formatSyncDate(isoString: string): string {
   if (!isoString) return 'Baru saja'
   try {
@@ -241,6 +320,10 @@ export function exportICS(event: Event): void {
   link.download = `${event.id}.ics`
   link.click()
   URL.revokeObjectURL(link.href)
+}
+
+export function exportAllICS(eventList: Event[]): void {
+  eventList.forEach((ev) => exportICS(ev))
 }
 
 export async function shareEvent(event: Event): Promise<void> {

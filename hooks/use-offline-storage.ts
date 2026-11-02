@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import type { StorageStats } from '@/types/event'
+import { useEffect, useState, useCallback } from 'react'
+import type { StorageStats } from '@/types'
 import {
   events,
   STORAGE_KEY_LAST_SYNC,
@@ -21,6 +21,60 @@ export function useOfflineStorage() {
   const [offline, setOffline] = useState(false)
   const [installed, setInstalled] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+
+  // Measure local storage quota and usage
+  const measureStorage = useCallback(() => {
+    if (typeof window !== 'undefined' && navigator.storage && navigator.storage.estimate) {
+      navigator.storage
+        .estimate()
+        .then(({ usage = 0, quota = 52428800 }) => {
+          const usageMB = +(usage / (1024 * 1024)).toFixed(1)
+          const quotaMB = +(quota / (1024 * 1024)).toFixed(0)
+          const percent = Math.min(100, Math.max(1, Math.round((usage / quota) * 100)))
+          setStorageStats({ usageMB, quotaMB, percent })
+        })
+        .catch(() => {})
+    }
+  }, [])
+
+  // Core offline storage persistence and Service Worker sync
+  const saveAndSync = useCallback((newSavedIds: string[], toastNotice?: string) => {
+    setSaved(newSavedIds)
+    try {
+      localStorage.setItem(STORAGE_KEY_SAVED_IDS, JSON.stringify(newSavedIds))
+      const currentSavedEvents = events.filter((ev) => newSavedIds.includes(ev.id))
+      localStorage.setItem(STORAGE_KEY_OFFLINE_EVENTS, JSON.stringify(currentSavedEvents))
+      const now = new Date().toISOString()
+      localStorage.setItem(STORAGE_KEY_LAST_SYNC, now)
+      setLastSync(now)
+
+      // Sync with Service Worker Cache
+      if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.ready
+          .then((reg) => {
+            reg.active?.postMessage({
+              type: 'SYNC_OFFLINE_EVENTS',
+              payload: {
+                savedIds: newSavedIds,
+                events: currentSavedEvents,
+                timestamp: Date.now(),
+              },
+            })
+          })
+          .catch(() => {})
+      }
+
+      measureStorage()
+    } catch (err) {
+      console.error('[PWA] Failed to update offline storage:', err)
+    }
+
+    if (toastNotice) {
+      setToastMessage(toastNotice)
+      if ((window as any)._pwaToastTimer) clearTimeout((window as any)._pwaToastTimer)
+      ;(window as any)._pwaToastTimer = setTimeout(() => setToastMessage(null), 3200)
+    }
+  }, [measureStorage])
 
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine)
@@ -56,20 +110,6 @@ export function useOfflineStorage() {
       console.warn('[PWA] Error reading saved events from storage:', err)
     }
 
-    // Measure storage usage
-    const measureStorage = () => {
-      if (typeof window !== 'undefined' && navigator.storage && navigator.storage.estimate) {
-        navigator.storage
-          .estimate()
-          .then(({ usage = 0, quota = 52428800 }) => {
-            const usageMB = +(usage / (1024 * 1024)).toFixed(1)
-            const quotaMB = +(quota / (1024 * 1024)).toFixed(0)
-            const percent = Math.min(100, Math.max(1, Math.round((usage / quota) * 100)))
-            setStorageStats({ usageMB, quotaMB, percent })
-          })
-          .catch(() => {})
-      }
-    }
     measureStorage()
 
     // PWA Service Worker Registration & sync
@@ -118,75 +158,31 @@ export function useOfflineStorage() {
       window.removeEventListener('offline', update)
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall as any)
     }
-  }, [])
+  }, [measureStorage])
 
-  const saveAndSync = (newSavedIds: string[], toastNotice?: string) => {
-    setSaved(newSavedIds)
-    try {
-      localStorage.setItem(STORAGE_KEY_SAVED_IDS, JSON.stringify(newSavedIds))
-      const currentSavedEvents = events.filter((ev) => newSavedIds.includes(ev.id))
-      localStorage.setItem(STORAGE_KEY_OFFLINE_EVENTS, JSON.stringify(currentSavedEvents))
-      const now = new Date().toISOString()
-      localStorage.setItem(STORAGE_KEY_LAST_SYNC, now)
-      setLastSync(now)
+  const toggleSaved = useCallback((id: string) => {
+    setSaved((prevSaved) => {
+      const isCurrentlySaved = prevSaved.includes(id)
+      const newSaved = isCurrentlySaved
+        ? prevSaved.filter((item) => item !== id)
+        : [...prevSaved, id]
+      const eventObj = events.find((e) => e.id === id)
+      const eventName = eventObj ? `"${eventObj.title}"` : 'Acara'
 
-      // Sync with Service Worker Cache
-      if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.ready
-          .then((reg) => {
-            reg.active?.postMessage({
-              type: 'SYNC_OFFLINE_EVENTS',
-              payload: {
-                savedIds: newSavedIds,
-                events: currentSavedEvents,
-                timestamp: Date.now(),
-              },
-            })
-          })
-          .catch(() => {})
+      if (isCurrentlySaved) {
+        saveAndSync(newSaved, `${eventName} dihapus dari penyimpanan offline.`)
+      } else {
+        saveAndSync(newSaved, `${eventName} berhasil disimpan offline!`)
       }
+      return newSaved
+    })
+  }, [saveAndSync])
 
-      // Re-measure storage
-      if (typeof window !== 'undefined' && navigator.storage && navigator.storage.estimate) {
-        navigator.storage
-          .estimate()
-          .then(({ usage = 0, quota = 52428800 }) => {
-            const usageMB = +(usage / (1024 * 1024)).toFixed(1)
-            const quotaMB = +(quota / (1024 * 1024)).toFixed(0)
-            const percent = Math.min(100, Math.max(1, Math.round((usage / quota) * 100)))
-            setStorageStats({ usageMB, quotaMB, percent })
-          })
-          .catch(() => {})
-      }
-    } catch (err) {
-      console.error('[PWA] Failed to update offline storage:', err)
-    }
-
-    if (toastNotice) {
-      setToastMessage(toastNotice)
-      if ((window as any)._pwaToastTimer) clearTimeout((window as any)._pwaToastTimer)
-      ;(window as any)._pwaToastTimer = setTimeout(() => setToastMessage(null), 3200)
-    }
-  }
-
-  const toggleSaved = (id: string) => {
-    const isCurrentlySaved = saved.includes(id)
-    const newSaved = isCurrentlySaved ? saved.filter((item) => item !== id) : [...saved, id]
-    const eventObj = events.find((e) => e.id === id)
-    const eventName = eventObj ? `"${eventObj.title}"` : 'Acara'
-
-    if (isCurrentlySaved) {
-      saveAndSync(newSaved, `${eventName} dihapus dari penyimpanan offline.`)
-    } else {
-      saveAndSync(newSaved, `${eventName} berhasil disimpan offline!`)
-    }
-  }
-
-  const resyncOfflineStorage = () => {
+  const resyncOfflineStorage = useCallback(() => {
     saveAndSync(saved, 'Semua acara offline berhasil disinkronkan ulang!')
-  }
+  }, [saveAndSync, saved])
 
-  const clearOfflineStorage = () => {
+  const clearOfflineStorage = useCallback(() => {
     if (typeof window !== 'undefined' && window.confirm('Hapus semua acara yang tersimpan offline?')) {
       saveAndSync([], 'Penyimpanan offline berhasil dibersihkan.')
       if ('serviceWorker' in navigator) {
@@ -197,9 +193,9 @@ export function useOfflineStorage() {
           .catch(() => {})
       }
     }
-  }
+  }, [saveAndSync])
 
-  const handleInstallClick = async () => {
+  const handleInstallClick = useCallback(async () => {
     if (deferredPrompt) {
       deferredPrompt.prompt()
       const choice = await deferredPrompt.userChoice
@@ -210,7 +206,7 @@ export function useOfflineStorage() {
     } else {
       setInstalled(true)
     }
-  }
+  }, [deferredPrompt])
 
   return {
     saved,
